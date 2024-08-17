@@ -2,3 +2,5 @@
 /frontend/node_modules
 /backend/.env
 blocked_domains.json
+/frontend/.env.*
+/backend/.env.*
