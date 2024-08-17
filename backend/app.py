@@ -2,17 +2,75 @@ import torch
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 import gc
 import requests
-from flask import Flask, request, jsonify
+from flask import Flask, make_response, request, jsonify
 from newspaper import Article
 from urllib.parse import urlparse
 import os
 from dotenv import load_dotenv
 from flask_cors import CORS
 import json
-import re
+from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
+from werkzeug.security import generate_password_hash, check_password_hash
+
 
 app = Flask(__name__)
-CORS(app)
+CORS(app,supports_credentials=True,resources={r"/api/*": {"origins": "*"}})
+app.config['JWT_SECRET_KEY'] = 'super-secret'  # Change this!
+app.config['JWT_ACCESS_TOKEN_EXPIRES'] = 3600  # 1 hour
+app.config['JWT_TOKEN_LOCATION'] = ['cookies']
+jwt = JWTManager(app)
+
+# In-memory user database
+users = {}
+
+@app.route('/api/register', methods=['POST'])
+def register():
+    username = request.json.get('username')
+    password = request.json.get('password')
+
+    if not username or not password:
+        return jsonify({'error': 'Username and password required'}), 400
+    
+    if username in users:
+        return jsonify({'error': 'Username already exists'}), 400
+    
+    users[username] = generate_password_hash(password)
+    return jsonify({'message': 'User created'}), 201
+
+@app.route('/api/login', methods=['POST'])
+def login():
+    username = request.json.get('username')
+    password = request.json.get('password')
+
+    if not username or not password:
+        return jsonify({'error': 'Username and password required'}), 400
+    
+    if username not in users or not check_password_hash(users[username], password):
+        return jsonify({'error': 'Invalid username or password'}), 401
+    
+    access_token = create_access_token(identity=username)
+    print(access_token)
+    resp = jsonify({'login': True})
+    resp.set_cookie('access_token_cookie', access_token,httponly=True,secure=False,samesite='Lax')
+    print("cookie set")
+    return resp
+
+@app.route('/api/logout', methods=['POST'])
+def logout():
+    response = make_response(jsonify({"msg": "Logout successful"}), 200)
+    response.set_cookie('access_token_cookie', '', expires=0)
+    return response
+
+@app.route('/api/protected', methods=['GET'])
+@jwt_required()
+def protected():
+    try:
+        current_user = get_jwt_identity()
+        return jsonify(logged_in_as=current_user), 200
+    except Exception as e:
+        return jsonify({'error': 'Invalid token'}), 401
+
+
 
 load_dotenv()
 
@@ -139,6 +197,7 @@ def is_relevant(text, stock_name, title):
 
 
 @app.route('/api/news', methods=['GET'])
+@jwt_required()
 def get_news():
     stock_name = request.args.get('stock')
     num_articles = request.args.get('num_articles', default=5, type=int)
@@ -172,6 +231,7 @@ def get_news():
     return jsonify(summarized_articles)
 
 @app.route('/api/blocked_domains', methods=['GET', 'POST', 'DELETE'])
+@jwt_required()
 def manage_blocked_domains():
     global BLOCKED_DOMAINS
     

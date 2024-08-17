@@ -4,6 +4,7 @@ import "react-toastify/dist/ReactToastify.css";
 import { PulseLoader } from "react-spinners";
 import Image from "next/image";
 import logo from "../../public/logo.png";
+import { useRouter } from "next/navigation";
 
 interface Article {
 	title: string;
@@ -20,21 +21,33 @@ interface NavbarProps {
 	onSearch: (searchTerm: string, numArticles: number) => void;
 	stock: string;
 	setStock: (value: string) => void;
+	onLogout: () => void; // New prop for logout functionality
 }
 
-interface NavbarProps {
-	onSearch: (searchTerm: string, numArticles: number) => void;
-	stock: string;
-	setStock: (value: string) => void;
-}
-
-const Navbar: React.FC<NavbarProps> = ({ onSearch, stock, setStock }) => {
+const Navbar: React.FC<NavbarProps> = ({
+	onSearch,
+	stock,
+	setStock,
+	onLogout,
+}) => {
 	const [numArticles, setNumArticles] = useState<number>(5);
+	const router = useRouter();
 
 	const handleSubmit = (e: FormEvent<HTMLFormElement>) => {
 		e.preventDefault();
 		onSearch(stock, numArticles);
 		toast.success("Search submitted successfully!");
+	};
+
+	const handleLogout = async () => {
+		try {
+			await onLogout();
+			toast.success("Logged out successfully");
+			router.push("/login");
+		} catch (error) {
+			console.error("Logout error:", error);
+			toast.error("Logout failed. Please try again.");
+		}
 	};
 
 	return (
@@ -82,11 +95,21 @@ const Navbar: React.FC<NavbarProps> = ({ onSearch, stock, setStock }) => {
 							<img alt="profile picture" src="/p1.jpg" />
 						</div>
 					</div>
+					<ul
+						tabIndex={0}
+						className="mt-3 z-[1] p-2 shadow menu menu-sm dropdown-content bg-base-100 rounded-box w-52"
+					>
+						<li>
+							<a onClick={handleLogout}>Logout</a>
+						</li>
+					</ul>
 				</div>
 			</div>
 		</div>
 	);
 };
+
+export default Navbar;
 const NewsArticles: React.FC<NewsArticlesProps> = ({ news, loading }) => {
 	return (
 		<div className="space-y-4">
