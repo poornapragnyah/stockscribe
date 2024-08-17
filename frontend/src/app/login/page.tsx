@@ -35,44 +35,78 @@ const Login = () => {
 
 	return (
 		<div className="min-h-screen flex items-center justify-center bg-gray-100">
-			<div className="bg-white p-8 rounded shadow-md">
-				<h2 className="text-2xl mb-4">Login</h2>
+			<div className="bg-white p-8 rounded-lg shadow-lg w-full max-w-md">
+				<h2 className="text-3xl font-bold mb-6 text-center">Login</h2>
 				<form onSubmit={handleSubmit}>
 					<div className="mb-4">
-						<label htmlFor="username" className="block mb-2">
+						<label className="block text-sm font-medium text-gray-700">
 							Username
 						</label>
-						<input
-							type="text"
-							id="username"
-							value={username}
-							onChange={(e) => setUsername(e.target.value)}
-							className="w-full px-3 py-2 border rounded"
-							required
-						/>
+						<div className="relative mt-1">
+							<input
+								type="text"
+								value={username}
+								onChange={(e) => setUsername(e.target.value)}
+								placeholder="Enter your username"
+								className="input input-bordered w-full pl-10"
+							/>
+							<div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+								<svg
+									xmlns="http://www.w3.org/2000/svg"
+									fill="currentColor"
+									viewBox="0 0 16 16"
+									className="h-5 w-5 text-gray-400"
+								>
+									<path d="M8 8a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM12.735 14c.618 0 1.093-.561.872-1.139a6.002 6.002 0 0 0-11.215 0c-.22.578.254 1.139.872 1.139h9.47Z" />
+								</svg>
+							</div>
+						</div>
 					</div>
-					<div className="mb-4">
-						<label htmlFor="password" className="block mb-2">
+
+					<div className="mb-6">
+						<label className="block text-sm font-medium text-gray-700">
 							Password
 						</label>
-						<input
-							type="password"
-							id="password"
-							value={password}
-							onChange={(e) => setPassword(e.target.value)}
-							className="w-full px-3 py-2 border rounded"
-							required
-						/>
+						<div className="relative mt-1">
+							<input
+								type="password"
+								value={password}
+								onChange={(e) => setPassword(e.target.value)}
+								placeholder="Enter your password"
+								className="input input-bordered w-full pl-10"
+							/>
+							<div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+								<svg
+									xmlns="http://www.w3.org/2000/svg"
+									fill="currentColor"
+									viewBox="0 0 16 16"
+									className="h-5 w-5 text-gray-400"
+								>
+									<path
+										fillRule="evenodd"
+										d="M14 6a4 4 0 0 1-4.899 3.899l-1.955 1.955a.5.5 0 0 1-.353.146H5v1.5a.5.5 0 0 1-.5.5h-2a.5.5 0 0 1-.5-.5v-2.293a.5.5 0 0 1 .146-.353l3.955-3.955A4 4 0 1 1 14 6Zm-4-2a.75.75 0 0 0 0 1.5.5.5 0 0 1 .5.5.75.75 0 0 0 1.5 0 2 2 0 0 0-2-2Z"
+										clipRule="evenodd"
+									/>
+								</svg>
+							</div>
+						</div>
 					</div>
+
 					<button
 						type="submit"
-						className="w-full bg-blue-500 text-white py-2 rounded hover:bg-blue-600"
+						className="btn bg-[#43c49f] w-full text-slate-50 hover:bg-[#3aae8b]"
 					>
 						Login
 					</button>
 				</form>
+				<p className="mt-4 text-center">
+					Don't have an account?{" "}
+					<a href="/register" className="text-[#43c49f] hover:underline">
+						Register
+					</a>
+				</p>
+				<ToastContainer position="bottom-right" />
 			</div>
-			<ToastContainer position="bottom-right" />
 		</div>
 	);
 };
