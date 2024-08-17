@@ -1,6 +1,9 @@
 import React, { FormEvent, useState } from "react";
 import { ToastContainer, toast } from "react-toastify";
 import "react-toastify/dist/ReactToastify.css";
+import { PulseLoader } from "react-spinners";
+import Image from "next/image";
+import logo from "../../public/logo.png";
 
 interface Article {
 	title: string;
@@ -37,7 +40,9 @@ const Navbar: React.FC<NavbarProps> = ({ onSearch, stock, setStock }) => {
 	return (
 		<div className="navbar bg-base-100 p-2">
 			<div className="flex-1">
-				<a className="btn btn-ghost text-xl">Stock News Summariser</a>
+				<a className="btn btn-ghost text-xl">
+					<Image src={logo} alt="logo" height={26}></Image>StockScribe
+				</a>
 			</div>
 			<div className="flex-none gap-2">
 				<div className="form-control">
@@ -58,7 +63,11 @@ const Navbar: React.FC<NavbarProps> = ({ onSearch, stock, setStock }) => {
 							<option value="10">10 articles</option>
 							<option value="15">15 articles</option>
 						</select>
-						<button type="submit" className="btn btn-primary">
+						<button
+							type="submit"
+							className="btn btn-primary text disabled:btn-primary disabled:cursor-not-allowed text-slate-50 disabled:text-white"
+							disabled={stock === ""}
+						>
 							Search
 						</button>
 					</form>
@@ -70,7 +79,7 @@ const Navbar: React.FC<NavbarProps> = ({ onSearch, stock, setStock }) => {
 						className="btn btn-ghost btn-circle avatar"
 					>
 						<div className="w-10 rounded-full">
-							<img alt="Tailwind CSS Navbar component" src="/p1.jpg" />
+							<img alt="profile picture" src="/p1.jpg" />
 						</div>
 					</div>
 				</div>
@@ -82,7 +91,13 @@ const NewsArticles: React.FC<NewsArticlesProps> = ({ news, loading }) => {
 	return (
 		<div className="space-y-4">
 			{loading ? (
-				<p className="text-center text-gray-600">Loading articles...</p>
+				<p className="text-center text-gray-600 ">
+					{" "}
+					<div className="spinner-container">
+						<PulseLoader color="#7480ff" />
+					</div>
+					Loading articles...
+				</p>
 			) : news.length === 0 ? (
 				<p className="text-center text-gray-600">
 					No articles found. Try searching for a stock symbol.
