@@ -25,7 +25,12 @@ const Home: NextPage = () => {
 	const [news, setNews] = useState<Article[]>([]);
 	const [loading, setLoading] = useState<boolean>(false);
 	const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
+	const [requestCount, setRequestCount] = useState<number>(0);
+	const [timestamps, setTimestamps] = useState<number[]>([]);
 	const router = useRouter();
+
+	const RATE_LIMIT = 2;
+	const TIME_WINDOW = 60 * 1000; // 1 hour
 
 	useEffect(() => {
 		// Check authentication status
@@ -97,37 +102,27 @@ const Home: NextPage = () => {
 
 			setLoading(true);
 			setNews([]);
+
 			try {
-				const cachedNews = localStorage.getItem(`stockNews_${searchTerm}`);
-				if (cachedNews) {
-					const { timestamp, data }: CachedData = JSON.parse(cachedNews);
-					const now = new Date().getTime();
-					const hoursSinceCached = (now - timestamp) / (1000 * 60);
-
-					if (hoursSinceCached < 1) {
-						setNews(data);
-						setLoading(false);
-						toast.info(`Loaded cached news for ${searchTerm}`);
-						return;
-					} else {
-						localStorage.removeItem(`stockNews_${searchTerm}`);
-					}
-				}
-
 				const response = await fetch(
 					`http://localhost:5000/api/news?stock=${searchTerm}&num_articles=${numArticles}`,
 					{
-						credentials: "include", // Include credentials for JWT
+						credentials: "include",
 					}
 				);
+
 				if (!response.ok) {
 					if (response.status === 401) {
-						// Unauthorized, redirect to login
 						router.push("/login");
 						return;
 					}
+					if (response.status === 429) {
+						toast.error("Rate limit exceeded");
+						throw new Error("Rate limit exceeded");
+					}
 					throw new Error("Network response was not ok");
 				}
+
 				const data: Article[] = await response.json();
 				setNews(data);
 
@@ -142,7 +137,11 @@ const Home: NextPage = () => {
 				);
 			} catch (error) {
 				console.error("Error fetching news:", error);
-				toast.error("Failed to fetch news articles");
+				if (error instanceof Error) {
+					toast.error(error.message);
+				} else {
+					toast.error("Failed to fetch news articles");
+				}
 			} finally {
 				setLoading(false);
 			}

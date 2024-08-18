@@ -8,6 +8,8 @@ from urllib.parse import urlparse
 import os
 from dotenv import load_dotenv
 from flask_cors import CORS
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 import json
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -19,6 +21,13 @@ app.config['JWT_SECRET_KEY'] = 'super-secret'  # Change this!
 app.config['JWT_ACCESS_TOKEN_EXPIRES'] = 3600  # 1 hour
 app.config['JWT_TOKEN_LOCATION'] = ['cookies']
 jwt = JWTManager(app)
+limiter = Limiter(
+    get_remote_address,
+    app=app,
+    default_limits=["20 per day", "10 per hour"],
+    storage_uri="memory://",
+)
+
 
 # In-memory user database
 users = {}
@@ -56,6 +65,7 @@ def login():
     return resp
 
 @app.route('/api/logout', methods=['POST'])
+@limiter.exempt
 def logout():
     response = make_response(jsonify({"msg": "Logout successful"}), 200)
     response.set_cookie('access_token_cookie', '', expires=0)
@@ -198,7 +208,9 @@ def is_relevant(text, stock_name, title):
 
 @app.route('/api/news', methods=['GET'])
 @jwt_required()
+@limiter.limit("2 per minute")
 def get_news():
+    print(f"Rate limit remaining: {limiter.get_limit()}")
     stock_name = request.args.get('stock')
     num_articles = request.args.get('num_articles', default=5, type=int)
     
@@ -229,6 +241,7 @@ def get_news():
             print(f"Error processing article {article['url']}: {str(e)}")
     
     return jsonify(summarized_articles)
+
 
 @app.route('/api/blocked_domains', methods=['GET', 'POST', 'DELETE'])
 @jwt_required()
