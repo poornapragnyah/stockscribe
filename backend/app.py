@@ -1,3 +1,5 @@
+import atexit
+from sqlalchemy import func
 import torch
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 import gc
@@ -13,9 +15,9 @@ from flask_limiter.util import get_remote_address
 import json
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
 from werkzeug.security import generate_password_hash, check_password_hash
-from werkzeug.security import generate_password_hash, check_password_hash
 from flask_sqlalchemy import SQLAlchemy
-
+from datetime import datetime, timedelta, timezone
+from apscheduler.schedulers.background import BackgroundScheduler
 
 app = Flask(__name__)
 CORS(app,supports_credentials=True,resources={r"/api/*": {"origins": "*"}})
@@ -51,6 +53,36 @@ class User(db.Model):
     def check_password(self, password):
         return check_password_hash(self.password_hash, password)
 
+class BlockedDomain(db.Model):
+    __tablename__ = 'blocked_domains'
+    id = db.Column(db.Integer, primary_key=True)
+    domain = db.Column(db.String(255), unique=True, nullable=False)
+
+    def __repr__(self):
+        return f'<BlockedDomain {self.domain}>'
+
+class NewsCache(db.Model):
+    __tablename__ = 'news_cache'
+    id = db.Column(db.Integer, primary_key=True)
+    stock_name = db.Column(db.String(255), nullable=False)
+    num_articles = db.Column(db.Integer, nullable=False)
+    data = db.Column(db.JSON, nullable=False)
+    created_at = db.Column(db.DateTime(timezone=True), server_default=func.now())
+
+    def __repr__(self):
+        return f'<NewsCache {self.stock_name}_{self.num_articles}>'
+    
+def get_blocked_domains():
+    return set(domain.domain for domain in BlockedDomain.query.all())
+
+def add_blocked_domain(domain):
+    new_domain = BlockedDomain(domain=domain)
+    db.session.add(new_domain)
+    db.session.commit()
+
+def remove_blocked_domain(domain):
+    BlockedDomain.query.filter_by(domain=domain).delete()
+    db.session.commit()
 
 @app.route('/api/register', methods=['POST'])
 def register():
@@ -114,12 +146,8 @@ def protected():
         return jsonify({'error': 'Invalid token'}), 401
 
 
-
-load_dotenv()
-
 NEWS_API_KEY = os.environ.get('NEWS_API_KEY')
 NEWS_API_URL = 'https://newsapi.org/v2/everything'
-BLOCKED_DOMAINS_FILE = 'blocked_domains.json'
 
 # Ensure CUDA is available
 assert torch.cuda.is_available(), "CUDA is not available. Please check your GPU setup."
@@ -129,19 +157,6 @@ model_name = "facebook/bart-large-cnn"
 tokenizer = AutoTokenizer.from_pretrained(model_name)
 model = AutoModelForSeq2SeqLM.from_pretrained(model_name).to('cuda')
 
-# Load blocked domains from file
-def load_blocked_domains():
-    if os.path.exists(BLOCKED_DOMAINS_FILE):
-        with open(BLOCKED_DOMAINS_FILE, 'r') as f:
-            return set(json.load(f))
-    return set()
-
-# Save blocked domains to file
-def save_blocked_domains(domains):
-    with open(BLOCKED_DOMAINS_FILE, 'w') as f:
-        json.dump(list(domains), f)
-
-BLOCKED_DOMAINS = load_blocked_domains()
 
 def summarize_text(text, max_length=150, min_length=50, use_cuda=True):
     device = 'cuda' if use_cuda else 'cpu'
@@ -168,7 +183,9 @@ def fetch_news(stock_name):
 def extract_and_summarize(article, stock_name):
     url = article['url']
     domain = urlparse(url).netloc
-    if domain in BLOCKED_DOMAINS:
+    blocked_domains = get_blocked_domains()
+    
+    if domain in blocked_domains:
         return None
     
     try:
@@ -200,12 +217,11 @@ def extract_and_summarize(article, stock_name):
             'title': article_obj.title,
             'summary': summary,
             'url': url,
-            'image_url': article['urlToImage']  # Include the image URL from NewsAPI
+            'image_url': article['urlToImage']
         }
     except requests.exceptions.HTTPError as http_err:
         if http_err.response.status_code == 403:
-            BLOCKED_DOMAINS.add(domain)
-            save_blocked_domains(BLOCKED_DOMAINS)
+            add_blocked_domain(domain)
         print(f"HTTP error occurred for {url}: {http_err}")
     except requests.exceptions.RequestException as req_err:
         print(f"Request error occurred for {url}: {req_err}")
@@ -213,6 +229,20 @@ def extract_and_summarize(article, stock_name):
         print(f"Error processing article {url}: {e}")
     
     return None
+
+def clean_news_cache():
+    with app.app_context():
+        day_ago = datetime.utcnow() - timedelta(days=1)
+        old_cache = NewsCache.query.filter(NewsCache.created_at < day_ago).all()
+        for cache in old_cache:
+            db.session.delete(cache)
+        db.session.commit()
+        print(f"Cleaned {len(old_cache)} old cache entries")
+
+# Set up the scheduler
+scheduler = BackgroundScheduler()
+scheduler.add_job(func=clean_news_cache, trigger="interval", hours=24)
+scheduler.start()
 
     
 
@@ -252,6 +282,13 @@ def get_news():
     if num_articles < 1 or num_articles > 20:
         return jsonify({'error': 'Number of articles must be between 1 and 20'}), 400
     
+    # Check if we have cached data
+    cached_news = NewsCache.query.filter_by(stock_name=stock_name, num_articles=num_articles).first()
+    
+    if cached_news and (datetime.now(timezone.utc) - cached_news.created_at.astimezone(timezone.utc)) < timedelta(days=1):
+        return jsonify(cached_news.data)
+    
+    # If no valid cached data, fetch new data
     news_data = fetch_news(stock_name)
     
     if news_data['status'] != 'ok':
@@ -271,7 +308,16 @@ def get_news():
                 articles_summarized += 1
         except Exception as e:
             print(f"Error processing article {article['url']}: {str(e)}")
-
+    
+    # Store the new data in the cache
+    if cached_news:
+        cached_news.data = summarized_articles
+        cached_news.created_at = datetime.now(timezone.utc)
+    else:
+        new_cache = NewsCache(stock_name=stock_name, num_articles=num_articles, data=summarized_articles)
+        db.session.add(new_cache)
+    
+    db.session.commit()
     
     return jsonify(summarized_articles)
 
@@ -279,28 +325,28 @@ def get_news():
 @app.route('/api/blocked_domains', methods=['GET', 'POST', 'DELETE'])
 @jwt_required()
 def manage_blocked_domains():
-    global BLOCKED_DOMAINS
-    
     if request.method == 'GET':
-        return jsonify(list(BLOCKED_DOMAINS))
+        return jsonify(list(get_blocked_domains()))
     
     elif request.method == 'POST':
         domain = request.json.get('domain')
         if domain:
-            BLOCKED_DOMAINS.add(domain)
-            save_blocked_domains(BLOCKED_DOMAINS)
+            add_blocked_domain(domain)
             return jsonify({'message': f'Domain {domain} added to blocked list'}), 201
         return jsonify({'error': 'No domain provided'}), 400
     
     elif request.method == 'DELETE':
         domain = request.json.get('domain')
-        if domain in BLOCKED_DOMAINS:
-            BLOCKED_DOMAINS.remove(domain)
-            save_blocked_domains(BLOCKED_DOMAINS)
+        if domain in get_blocked_domains():
+            remove_blocked_domain(domain)
             return jsonify({'message': f'Domain {domain} removed from blocked list'})
         return jsonify({'error': 'Domain not found in blocked list'}), 404
+
 
 if __name__ == '__main__':
     with app.app_context():
         db.create_all()
     app.run(debug=True, port=5000)
+
+# Ensure a graceful shutdown of the scheduler
+atexit.register(lambda: scheduler.shutdown())
