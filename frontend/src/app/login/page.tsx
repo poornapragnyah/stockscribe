@@ -8,6 +8,7 @@ import "react-toastify/dist/ReactToastify.css";
 import { z } from "zod";
 import { useRouter } from "next/navigation";
 import { loginSchema } from "@/schemas/login"; // Adjust the path as necessary
+import { PulseLoader } from "react-spinners";
 
 type LoginFormInputs = z.infer<typeof loginSchema>;
 
@@ -19,6 +20,7 @@ const Login = () => {
 	} = useForm<LoginFormInputs>({
 		resolver: zodResolver(loginSchema),
 	});
+	const [isLoggingIn, setIsLoggingIn] = React.useState<boolean>(false);
 
 	const router = useRouter();
 
@@ -36,11 +38,18 @@ const Login = () => {
 			if (response.ok) {
 				router.push("/home"); // Redirect to home page
 			} else {
-				throw new Error("Login failed");
+				const errorData = await response.json(); // Extract error message from response
+				const errorMessage =
+					errorData.error || "Login failed. Please try again.";
+				throw new Error(errorMessage);
 			}
 		} catch (error) {
+			// Cast the error to an Error type for better type safety
+			const errorMsg = (error as Error).message || "An unknown error occurred.";
 			console.error("Login error:", error);
-			toast.error("Login failed. Please try again.");
+			toast.error("Login failed: " + errorMsg);
+		} finally {
+			setIsLoggingIn(false); // Stop loading
 		}
 	};
 
@@ -92,8 +101,14 @@ const Login = () => {
 					<button
 						type="submit"
 						className="btn bg-[#43c49f] w-full text-slate-50 hover:bg-[#3aae8b] border-gray-50"
+						onClick={() => setIsLoggingIn(true)}
 					>
-						Login
+						{" "}
+						{isLoggingIn ? (
+							<PulseLoader color="#ffffff" size={8} margin={2} />
+						) : (
+							"Login"
+						)}
 					</button>
 				</form>
 				<p className="mt-4 text-center">

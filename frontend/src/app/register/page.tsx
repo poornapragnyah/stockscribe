@@ -1,13 +1,14 @@
 "use client";
 
 import React from "react";
-import { useForm } from "react-hook-form";
+import { set, useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { toast, ToastContainer } from "react-toastify";
 import "react-toastify/dist/ReactToastify.css";
 import { useRouter } from "next/navigation";
 import { z } from "zod";
 import { registerSchema } from "@/schemas/register"; // Adjust the path as necessary
+import { PulseLoader } from "react-spinners";
 
 type RegisterFormInputs = z.infer<typeof registerSchema>;
 
@@ -20,9 +21,12 @@ const Register = () => {
 		resolver: zodResolver(registerSchema),
 	});
 
+	const [isRegistering, setIsRegistering] = React.useState<boolean>(false);
+
 	const router = useRouter();
 
 	const onSubmit = async (data: RegisterFormInputs) => {
+		setIsRegistering(true); // Start loading
 		try {
 			const response = await fetch("http://localhost:5000/api/register", {
 				method: "POST",
@@ -36,11 +40,18 @@ const Register = () => {
 				toast.success("Registration successful! Please log in.");
 				router.push("/login"); // Redirect to login page
 			} else {
-				throw new Error("Registration failed");
+				const errorData = await response.json(); // Extract error message from response
+				const errorMessage =
+					errorData.error || "Registration failed. Please try again.";
+				throw new Error(errorMessage);
 			}
 		} catch (error) {
+			// Cast the error to an Error type for better type safety
+			const errorMsg = (error as Error).message || "An unknown error occurred.";
 			console.error("Registration error:", error);
-			toast.error("Registration failed. Please try again.");
+			toast.error("Registration failed: " + errorMsg);
+		} finally {
+			setIsRegistering(false); // Stop loading
 		}
 	};
 
@@ -51,6 +62,24 @@ const Register = () => {
 					Register
 				</h2>
 				<form onSubmit={handleSubmit(onSubmit)}>
+					<div className="mb-4">
+						<label className="block text-sm font-medium text-gray-700">
+							Email
+						</label>
+						<div className="relative mt-1">
+							<input
+								type="text"
+								{...register("email")}
+								placeholder="Enter your email"
+								className="input input-bordered w-full pl-10 bg-white"
+							/>
+							{errors.email && (
+								<p className="text-red-500 text-sm mt-1">
+									{errors.email.message}
+								</p>
+							)}
+						</div>
+					</div>
 					<div className="mb-4">
 						<label className="block text-sm font-medium text-gray-700">
 							Username
@@ -111,8 +140,13 @@ const Register = () => {
 					<button
 						type="submit"
 						className="btn btn-primary w-full text-slate-50"
+						disabled={isRegistering} // Disable button while loading
 					>
-						Register
+						{isRegistering ? (
+							<PulseLoader color="#ffffff" size={8} margin={2} />
+						) : (
+							"Register"
+						)}
 					</button>
 				</form>
 				<p className="mt-4 text-center">

@@ -13,6 +13,8 @@ from flask_limiter.util import get_remote_address
 import json
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
 from werkzeug.security import generate_password_hash, check_password_hash
+from werkzeug.security import generate_password_hash, check_password_hash
+from flask_sqlalchemy import SQLAlchemy
 
 
 app = Flask(__name__)
@@ -21,48 +23,79 @@ app.config['JWT_SECRET_KEY'] = 'super-secret'  # Change this!
 app.config['JWT_ACCESS_TOKEN_EXPIRES'] = 3600  # 1 hour
 app.config['JWT_TOKEN_LOCATION'] = ['cookies']
 jwt = JWTManager(app)
+
+# Database configuration
+app.config['SQLALCHEMY_DATABASE_URI'] = 'mysql+pymysql://root:root@localhost:3306/test_db'
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+db = SQLAlchemy(app)
+
 limiter = Limiter(
     get_remote_address,
     app=app,
-    default_limits=["20 per day", "10 per hour"],
+    default_limits=["200 per day", "100 per hour"],
     storage_uri="memory://",
 )
 
+# User model
+class User(db.Model):
 
-# In-memory user database
-users = {}
+    __tablename__ = 'users'
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(80), unique=True, nullable=False)
+    email = db.Column(db.String(120), unique=True, nullable=False)
+    password_hash = db.Column(db.String(255), nullable=False)
+
+    def set_password(self, password):
+        self.password_hash = generate_password_hash(password)
+
+    def check_password(self, password):
+        return check_password_hash(self.password_hash, password)
+
 
 @app.route('/api/register', methods=['POST'])
 def register():
-    username = request.json.get('username')
-    password = request.json.get('password')
+    data = request.json
+    username = data.get('username')
+    password = data.get('password')
+    email = data.get('email')
 
     if not username or not password:
         return jsonify({'error': 'Username and password required'}), 400
-    
-    if username in users:
+    if User.query.filter_by(email=email).first():
+        return jsonify({'error': 'Email already exists'}), 400
+
+    if User.query.filter_by(username=username).first():
         return jsonify({'error': 'Username already exists'}), 400
     
-    users[username] = generate_password_hash(password)
-    return jsonify({'message': 'User created'}), 201
+
+    new_user = User(username=username)
+    new_user.email = email
+    new_user.set_password(password)
+
+    db.session.add(new_user)
+    db.session.commit()
+
+    return jsonify({'message': 'User created successfully'}), 201
+
 
 @app.route('/api/login', methods=['POST'])
 def login():
-    username = request.json.get('username')
-    password = request.json.get('password')
+    data = request.json
+    username = data.get('username')
+    password = data.get('password')
 
     if not username or not password:
         return jsonify({'error': 'Username and password required'}), 400
-    
-    if username not in users or not check_password_hash(users[username], password):
+
+    user = User.query.filter_by(username=username).first()
+
+    if user and user.check_password(password):
+        access_token = create_access_token(identity=username)
+        resp = jsonify({'login': True})
+        resp.set_cookie('access_token_cookie', access_token, httponly=True, secure=False, samesite='Lax')
+        return resp
+    else:
         return jsonify({'error': 'Invalid username or password'}), 401
-    
-    access_token = create_access_token(identity=username)
-    print(access_token)
-    resp = jsonify({'login': True})
-    resp.set_cookie('access_token_cookie', access_token,httponly=True,secure=False,samesite='Lax')
-    print("cookie set")
-    return resp
 
 @app.route('/api/logout', methods=['POST'])
 @limiter.exempt
@@ -210,7 +243,6 @@ def is_relevant(text, stock_name, title):
 @jwt_required()
 @limiter.limit("2 per minute")
 def get_news():
-    print(f"Rate limit remaining: {limiter.get_limit()}")
     stock_name = request.args.get('stock')
     num_articles = request.args.get('num_articles', default=5, type=int)
     
@@ -239,6 +271,7 @@ def get_news():
                 articles_summarized += 1
         except Exception as e:
             print(f"Error processing article {article['url']}: {str(e)}")
+
     
     return jsonify(summarized_articles)
 
@@ -268,4 +301,6 @@ def manage_blocked_domains():
         return jsonify({'error': 'Domain not found in blocked list'}), 404
 
 if __name__ == '__main__':
+    with app.app_context():
+        db.create_all()
     app.run(debug=True, port=5000)
