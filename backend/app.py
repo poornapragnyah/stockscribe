@@ -18,6 +18,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from flask_sqlalchemy import SQLAlchemy
 from datetime import datetime, timedelta, timezone
 from apscheduler.schedulers.background import BackgroundScheduler
+import time
 
 app = Flask(__name__)
 CORS(app,supports_credentials=True,resources={r"/api/*": {"origins": "*"}})
@@ -67,7 +68,7 @@ class NewsCache(db.Model):
     stock_name = db.Column(db.String(255), nullable=False)
     num_articles = db.Column(db.Integer, nullable=False)
     data = db.Column(db.JSON, nullable=False)
-    created_at = db.Column(db.DateTime(timezone=True), server_default=func.now())
+    created_at = db.Column(db.DateTime(timezone=True), default=datetime.now(timezone.utc), nullable=False)
 
     def __repr__(self):
         return f'<NewsCache {self.stock_name}_{self.num_articles}>'
@@ -146,7 +147,7 @@ def protected():
         return jsonify({'error': 'Invalid token'}), 401
 
 
-NEWS_API_KEY = os.environ.get('NEWS_API_KEY')
+NEWS_API_KEY = os.getenv('NEWS_API_KEY') or '234ef51d9fee41ada47949e875f85de5'
 NEWS_API_URL = 'https://newsapi.org/v2/everything'
 
 # Ensure CUDA is available
@@ -176,8 +177,14 @@ def fetch_news(stock_name):
         'apiKey': NEWS_API_KEY,
         'language': 'en'
     }
-    response = requests.get(NEWS_API_URL, params=params)
-    return response.json()
+    print(NEWS_API_KEY)
+    try:
+        response = requests.get(NEWS_API_URL, params=params)
+        response.raise_for_status()  # Raises HTTPError for bad responses
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        print(f"An error occurred: {e}")
+        return {'status': 'error', 'message': str(e)}
 
 
 def extract_and_summarize(article, stock_name):
@@ -220,8 +227,9 @@ def extract_and_summarize(article, stock_name):
             'image_url': article['urlToImage']
         }
     except requests.exceptions.HTTPError as http_err:
-        if http_err.response.status_code == 403:
+        if http_err.response.status_code in [401, 403, 404]:
             add_blocked_domain(domain)
+            print(f"Added {domain} to blocked domains due to {http_err.response.status_code} error")
         print(f"HTTP error occurred for {url}: {http_err}")
     except requests.exceptions.RequestException as req_err:
         print(f"Request error occurred for {url}: {req_err}")
@@ -271,7 +279,7 @@ def is_relevant(text, stock_name, title):
 
 @app.route('/api/news', methods=['GET'])
 @jwt_required()
-@limiter.limit("2 per minute")
+@limiter.limit("10 per minute")
 def get_news():
     stock_name = request.args.get('stock')
     num_articles = request.args.get('num_articles', default=5, type=int)
@@ -282,44 +290,70 @@ def get_news():
     if num_articles < 1 or num_articles > 20:
         return jsonify({'error': 'Number of articles must be between 1 and 20'}), 400
     
-    # Check if we have cached data
-    cached_news = NewsCache.query.filter_by(stock_name=stock_name, num_articles=num_articles).first()
-    
-    if cached_news and (datetime.now(timezone.utc) - cached_news.created_at.astimezone(timezone.utc)) < timedelta(days=1):
-        return jsonify(cached_news.data)
-    
-    # If no valid cached data, fetch new data
-    news_data = fetch_news(stock_name)
-    
-    if news_data['status'] != 'ok':
-        return jsonify({'error': 'Failed to fetch news'}), 500
-    
-    summarized_articles = []
-    articles_summarized = 0
-    
-    for article in news_data['articles']:
-        if articles_summarized >= num_articles:
-            break
+    try:
+        start_time = time.time()
         
-        try:
-            summarized = extract_and_summarize(article, stock_name)
-            if summarized:
-                summarized_articles.append(summarized)
-                articles_summarized += 1
-        except Exception as e:
-            print(f"Error processing article {article['url']}: {str(e)}")
+        # Check if we have cached data
+        cached_news = NewsCache.query.filter_by(stock_name=stock_name, num_articles=num_articles).first()
+        
+        if cached_news and (datetime.now(timezone.utc) - cached_news.created_at.astimezone(timezone.utc)) < timedelta(days=1):
+            end_time = time.time()
+            return jsonify({
+                'articles': cached_news.data,
+                'source': 'cache',
+                'fetch_time': end_time - start_time,
+                'blocked_domains': []
+            })
+        
+        # If no valid cached data, fetch new data
+        news_data = fetch_news(stock_name)
+        
+        if not news_data or news_data.get('status') != 'ok':
+            app.logger.error(f"Failed to fetch news for {stock_name}. Response: {news_data}")
+            return jsonify({'error': 'Failed to fetch news', 'details': str(news_data)}), 500
+        
+        summarized_articles = []
+        articles_summarized = 0
+        newly_blocked_domains = set()
+        
+        for article in news_data.get('articles', []):
+            if articles_summarized >= num_articles:
+                break
+            
+            try:
+                summarized = extract_and_summarize(article, stock_name)
+                if summarized:
+                    summarized_articles.append(summarized)
+                    articles_summarized += 1
+                elif summarized is None:
+                    domain = urlparse(article['url']).netloc
+                    if domain in get_blocked_domains():
+                        newly_blocked_domains.add(domain)
+            except Exception as e:
+                app.logger.error(f"Error processing article {article.get('url', 'Unknown URL')}: {str(e)}")
+        
+        # Store the new data in the cache
+        if cached_news:
+            cached_news.data = summarized_articles
+            cached_news.created_at = datetime.now(timezone.utc)
+        else:
+            new_cache = NewsCache(stock_name=stock_name, num_articles=num_articles, data=summarized_articles)
+            db.session.add(new_cache)
+        
+        db.session.commit()
+        
+        end_time = time.time()
+        
+        return jsonify({
+            'articles': summarized_articles,
+            'source': 'api',
+            'fetch_time': end_time - start_time,
+            'blocked_domains': list(newly_blocked_domains)
+        })
     
-    # Store the new data in the cache
-    if cached_news:
-        cached_news.data = summarized_articles
-        cached_news.created_at = datetime.now(timezone.utc)
-    else:
-        new_cache = NewsCache(stock_name=stock_name, num_articles=num_articles, data=summarized_articles)
-        db.session.add(new_cache)
-    
-    db.session.commit()
-    
-    return jsonify(summarized_articles)
+    except Exception as e:
+        app.logger.error(f"Error in /api/news endpoint: {str(e)}")
+        return jsonify({'error': 'Internal Server Error', 'details': str(e)}), 500
 
 
 @app.route('/api/blocked_domains', methods=['GET', 'POST', 'DELETE'])
